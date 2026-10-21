@@ -1,0 +1,59 @@
+services:
+  # 1. PostgreSQL with pgvector extension enabled
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: contextgpt-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-contextgpt}
+      POSTGRES_USER: ${POSTGRES_USER:-contextgpt_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-contextgpt_secure_password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-contextgpt_user} -d ${POSTGRES_DB:-contextgpt}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. ContextGPT FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: contextgpt-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: ContextGPT
+      APP_ENV: production
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contextgpt_user}:${POSTGRES_PASSWORD:-contextgpt_secure_password}@db:5432/${POSTGRES_DB:-contextgpt}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-to-a-very-secure-random-secret-key-in-production}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      API_BASE_URL: http://localhost:8000
+      BACKEND_CORS_ORIGINS: '["http://localhost:8501","http://127.0.0.1:8501","http://frontend:8501"]'
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 3. ContextGPT Streamlit Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: contextgpt-frontend
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      API_BASE_URL: http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+    name: contextgpt-pgdata
