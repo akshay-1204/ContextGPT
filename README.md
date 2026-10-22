@@ -77,7 +77,7 @@ flowchart TD
     end
 
     subgraph StorageLayer ["Persistence Layer"]
-        DB[(PostgreSQL / SQLite)]
+        DB[(PostgreSQL 16 + pgvector)]
         Tables["users, sources, summaries, refresh_tokens, conversations, messages, document_chunks"]
         DB --- Tables
     end
@@ -95,16 +95,17 @@ flowchart TD
 
 | Source Type | Extractor Module | Features & Protections |
 | :--- | :--- | :--- |
-| **PDF Documents** | `backend/app/loaders/pdf_loader.py` | Extracts text and page metadata via PyPDF. Detects encrypted PDFs, empty PDFs, and informs users when PDFs are scanned images lacking OCR. |
-| **Plain Text & Markdown** | `backend/app/loaders/text_loader.py` | Robust multi-encoding fallback (`utf-8`, `utf-8-sig`, `latin-1`, `cp1252`) and whitespace validation. |
+| **PDF Documents** | `backend/app/loaders/pdf_loader.py` | Extracts text and page metadata via PyPDF / LangChain Community. Detects encrypted PDFs, empty PDFs, and informs users when PDFs are scanned images lacking OCR. |
+| **Plain Text & Markdown** | `backend/app/loaders/text_loader.py` | Multi-encoding fallback (`utf-8`, `utf-8-sig`, `latin-1`, `cp1252`) and whitespace validation via LangChain Community TextLoader. |
 | **Webpages (HTML)** | `backend/app/loaders/webpage_loader.py` | Extracts main article body and titles via BeautifulSoup. Protected by **anti-SSRF validation** blocking localhost, private subnets (RFC 1918), and cloud metadata IP (`169.254.169.254`). |
 | **REST APIs (JSON)** | `backend/app/loaders/api_loader.py` | Queries external endpoints safely via HTTP GET, parses structured JSON, respects timeouts, and redacts sensitive authorization tokens from logs. |
-| **Read-Only Database** | `backend/app/loaders/database_loader.py` | Connects to PostgreSQL or SQLite to run safe `SELECT` queries with keyword allowlisting to prevent mutation. Credentials masked in stored metadata. |
+| **Stock Market API** | `backend/app/loaders/stock_loader.py` | Custom LangChain BaseLoader connecting to Alpha Vantage daily time-series data, producing structured daily stock records. |
+| **Read-Only Database** | `backend/app/loaders/database_loader.py` | Connects to PostgreSQL to run safe `SELECT` queries with keyword allowlisting to prevent mutation. MySQL is explicitly blocked for security. Credentials masked in stored metadata. |
 | **Images (Vision)** | `backend/app/loaders/image_loader.py` | Analyzes PNG, JPEG, and WEBP formats using OpenAI Vision (`gpt-4o`). Validates dimensions and explains vision requirements when offline. |
 | **Office Documents** | `backend/app/loaders/office_loader.py` | Extracts text and tables from Word (`.docx`) and workbooks/sheets from Excel (`.xlsx`). |
-| **CSV Tabular Files** | `backend/app/loaders/csv_loader.py` | Parses tabular comma/semicolon/tab-separated files into formatted Markdown tables for LLM digestion. |
+| **CSV Tabular Files** | `backend/app/loaders/csv_loader.py` | Parses tabular comma/semicolon/tab-separated files into formatted Markdown tables via LangChain Community CSVLoader. |
 | **JSON & XML** | `backend/app/loaders/json_xml_loader.py` | Parses structured configuration, objects, and XML elements into readable indented text. |
-| **YouTube Transcripts** | `backend/app/loaders/youtube_loader.py` | Ingests official video captions and transcripts via legitimate APIs without video scraping. |
+| **YouTube Transcripts** | `backend/app/loaders/youtube_loader.py` | Ingests official video captions and transcripts via `youtube-transcript-api 1.2+` across watch, short (youtu.be), and embed URLs without scraping. |
 
 ---
 
@@ -116,16 +117,15 @@ flowchart TD
 | **FastAPI** | Backend Web Framework | High-speed ASGI performance, automatic OpenAPI / Swagger generation, and strict Pydantic validation. |
 | **Uvicorn** | ASGI Web Server | Lightning-fast asynchronous server for production Python deployments. |
 | **SQLAlchemy 2.x** | Object Relational Mapper (ORM) | Industry standard type-safe database queries, relationship management, and cascading deletions. |
-| **Psycopg 3** | PostgreSQL Driver | Native async/sync driver with connection pooling and binary PostgreSQL protocol support. |
-| **PostgreSQL + pgvector** | Production Vector Database | Stores application state, users, sources, and vector embeddings in a single unified ACID database. |
-| **SQLite (Fallback)** | Local Test & Development DB | Out-of-the-box local execution and zero-dependency automated testing. |
-| **Alembic** | Database Migrations | Version-controlled database schema migrations. |
-| **LangChain** | AI Document Orchestration | Clean recursive text splitting, token-bounded chunking, and document formatting. |
-| **OpenAI API** | LLMs and Embeddings | High intelligence summarization and text embeddings (`text-embedding-3-small`, `gpt-4o-mini`). |
-| **passlib[bcrypt]** | Password Hashing | Industry standard bcrypt password hashing with automatic salt generation. |
-| **python-jose** | Authentication Tokens | Cryptographically signed JWT access tokens with 1-hour expiration and Base64 refresh tokens. |
+| **Psycopg 3** | PostgreSQL Driver | Native modern async/sync driver with connection pooling and binary PostgreSQL protocol support. |
+| **PostgreSQL 16 + pgvector** | Primary Relational & Vector Database | Full ACID compliance, robust user/asset persistence, and native vector storage via pgvector with Psycopg 3. |
+| **Alembic** | Database Migrations | Version-controlled database schema migrations tracking all model tables and indexes. |
+| **LangChain & Community** | AI Document Orchestration | Clean document loaders (`BaseLoader`, `PyPDFLoader`, `CSVLoader`, `TextLoader`), token-bounded chunking, and PromptTemplates. |
+| **OpenAI / NVIDIA NIM** | LLMs and Embeddings | High intelligence summarization and text embeddings (`gpt-4o-mini`, `text-embedding-3-small`, or NVIDIA NIM models via `OPENAI_BASE_URL`). |
+| **pwdlib (Argon2)** | Password Hashing | State-of-the-art memory-hard password hashing recommended by OWASP. |
+| **PyJWT** | Authentication Tokens | Stateless, cryptographically signed JWT access tokens with individual `jti` entropy and revocable refresh tokens. |
 | **Streamlit** | Frontend User Interface | Reactive, rapid Python-based UI with interactive components, real-time metrics, and custom CSS styling. |
-| **Docker & Compose** | Containerized Deployment | Consistent multi-container orchestration for backend, frontend, and database. |
+| **Docker & Compose** | Containerized Deployment | Consistent multi-container orchestration for backend, frontend, and PostgreSQL (`pgvector/pgvector:pg16`). |
 | **Pytest** | Testing Framework | Comprehensive automated unit, integration, and security testing. |
 
 ---
@@ -219,7 +219,7 @@ ContextGPT/
 │   └── script.py.mako                  # Migration template
 │
 ├── tests/
-│   ├── conftest.py                     # SQLite in-memory fixtures & TestClient
+│   ├── conftest.py                     # Isolated test fixtures & TestClient
 │   ├── test_health.py                  # Liveness and readiness tests
 │   ├── test_auth.py                    # Registration, Argon2 hashing, and token rotation
 │   ├── test_sources.py                 # Source ingestion & anti-SSRF tests
@@ -287,21 +287,32 @@ Copy-Item .env.example .env
 cp .env.example .env
 ```
 
-Open `.env` in your text editor. ContextGPT works immediately with default SQLite settings:
+Open `.env` in your text editor and configure your database and API settings:
 ```dotenv
 APP_NAME=ContextGPT
 APP_ENV=development
 LOG_LEVEL=INFO
 
-# Add your OpenAI Key to enable live generative synthesis:
+# AI & LLM Model Configuration (Supports OpenAI & NVIDIA NIM)
+# For OpenAI:
 OPENAI_API_KEY=your-openai-api-key-here
 OPENAI_MODEL=gpt-4o-mini
 EMBEDDING_MODEL=text-embedding-3-small
 
-# Local development database (SQLite by default):
-DATABASE_URL=sqlite:///./contextgpt.db
+# For NVIDIA NIM (optional alternative):
+# OPENAI_BASE_URL=https://integrate.api.nvidia.com/v1
+# OPENAI_API_KEY=nvapi-...
+# OPENAI_MODEL=nvidia/nemotron-3.5-super-vl-120b-a12b
 
-# Authentication Secret:
+# Primary PostgreSQL Database (e.g., created via DBeaver or Docker on port 5432):
+POSTGRES_DB=contextgpt
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_postgres_password
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+DATABASE_URL=postgresql+psycopg://postgres:your_postgres_password@localhost:5432/contextgpt
+
+# Authentication Secret (generate with: openssl rand -hex 32):
 JWT_SECRET_KEY=change-this-to-a-very-secure-random-secret-key-in-production
 ACCESS_TOKEN_EXPIRE_MINUTES=60
 REFRESH_TOKEN_EXPIRE_DAYS=7
@@ -310,6 +321,11 @@ REFRESH_TOKEN_EXPIRE_DAYS=7
 API_BASE_URL=http://localhost:8000
 BACKEND_CORS_ORIGINS=["http://localhost:8501","http://127.0.0.1:8501"]
 ```
+
+> **Setting up the Database in DBeaver:**
+> 1. In **DBeaver**, connect to your local PostgreSQL server (`localhost:5432`).
+> 2. Right-click **Databases** -> **Create New Database**, name it `contextgpt`, and click **OK**.
+> 3. Ensure `DATABASE_URL` in your `.env` matches your username and password.
 
 ### D. Database Migrations (Alembic)
 
@@ -392,7 +408,7 @@ docker compose down
 
 ## 8. Automated Testing Suite
 
-ContextGPT has a comprehensive, automated test suite that tests all core layers using SQLite in-memory databases and mockable AI fallbacks:
+ContextGPT has a comprehensive, automated test suite that tests all core layers using isolated test database fixtures and mockable AI fallbacks:
 - Application startup and health checks
 - User registration, duplicate validation, and Argon2 password hashing
 - JWT access tokens and refresh token rotation with revocation
@@ -426,7 +442,7 @@ The user uploads a PDF file titled `python_iterators.pdf`, requests a detailed s
 
 1. **Authentication:**
    - The user registers and signs in.
-   - The backend hashes the password using **bcrypt** via `passlib` and returns a **JWT access token** (1 hour / 60 min) via `python-jose` and a Base64-encoded **refresh token** (7 days).
+   - The backend hashes the password using **Argon2** via `pwdlib` and returns a **JWT access token** (1 hour / 60 min) via `PyJWT` and a secure cryptographic **refresh token** (7 days).
    - The frontend stores the token in `st.session_state` and attaches `Authorization: Bearer <token>` to all subsequent requests.
 
 2. **Ingestion & Loader:**
@@ -524,8 +540,15 @@ The user uploads a PDF file titled `python_iterators.pdf`, requests a detailed s
 ### Q: Why do I see "ContextGPT Offline Demonstration Mode" in summaries or chat answers?
 **A:** This occurs when `OPENAI_API_KEY` is blank or invalid in your `.env` file. ContextGPT includes an offline mode so you can test all UI navigation, ingestion, chunking, and database operations without paid API credentials. To enable live AI synthesis, simply add your OpenAI API key to `.env` and restart the backend.
 
-### Q: Can I run ContextGPT locally without PostgreSQL?
-**A:** Yes! The application defaults to SQLite (`sqlite:///./contextgpt.db`) for lightweight local development. When running in Docker Compose, it automatically uses PostgreSQL with pgvector.
+### Q: How do I create and connect the database in DBeaver?
+**A:** 
+1. Open **DBeaver** and connect to your local PostgreSQL server (`localhost:5432`).
+2. Right-click on **Databases** -> **Create New Database**, name it `contextgpt`, and click **OK**.
+3. In your `.env` file, ensure `DATABASE_URL` is set:
+   ```dotenv
+   DATABASE_URL=postgresql+psycopg://postgres:your_password@localhost:5432/contextgpt
+   ```
+4. Run `alembic upgrade head` (or launch the backend with `uvicorn`, which automatically initializes all tables on startup). Refresh DBeaver to inspect all tables created under the `public` schema.
 
 ### Q: What happens when I delete a source?
 **A:** Thanks to SQLAlchemy foreign key cascade rules (`ondelete="CASCADE"`), deleting a source automatically cleans up all associated `document_chunks` and resets or removes linked summaries.
@@ -536,7 +559,7 @@ The user uploads a PDF file titled `python_iterators.pdf`, requests a detailed s
 
 - **Scanned PDFs & OCR:** The current PDF loader processes text-based PDFs. Rasterized or scanned image PDFs without selectable text will report that OCR is not yet enabled.
 - **Audio / Video Transcription:** YouTube captions are supported. Direct audio MP3/WAV transcription via Whisper is planned for the next release.
-- **pgvector in SQLite:** When running SQLite locally, vector similarity is computed via in-memory cosine similarity over stored float vector arrays. When deployed on PostgreSQL in Docker Compose, the native `pgvector` extension is utilized.
+- **Vector Acceleration:** Similarity search is accelerated using PostgreSQL + pgvector when the extension is active, with seamless in-database vector cosine similarity fallback ensuring full functionality across standard PostgreSQL installations.
 
 ---
 

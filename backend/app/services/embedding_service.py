@@ -16,7 +16,6 @@ def create_fallback_embedding(text: str, dim: int = 1536) -> List[float]:
     Ensures that RAG retrieval math and cosine similarity work seamlessly in test environments.
     """
     vector = [0.0] * dim
-    # Hash tokens and accumulate frequencies
     words = text.lower().split()
     if not words:
         words = ["empty"]
@@ -26,7 +25,6 @@ def create_fallback_embedding(text: str, dim: int = 1536) -> List[float]:
         idx = h % dim
         vector[idx] += 1.0 / (1.0 + (i % 10))
 
-    # Normalize vector to unit length
     magnitude = math.sqrt(sum(v * v for v in vector))
     if magnitude > 0:
         vector = [v / magnitude for v in vector]
@@ -39,6 +37,7 @@ def create_fallback_embedding(text: str, dim: int = 1536) -> List[float]:
 class EmbeddingService:
     def __init__(self, db: Session):
         self.db = db
+        self._embedding_failed = False
 
     def chunk_text(self, text: str, chunk_size: Optional[int] = None, chunk_overlap: Optional[int] = None) -> List[str]:
         """Split document text into bounded, overlapping chunks."""
@@ -55,7 +54,6 @@ class EmbeddingService:
             chunks = splitter.split_text(text)
             return [c.strip() for c in chunks if c.strip()]
         except Exception:
-            # Fallback simple sliding-window chunker if LangChain splitter fails
             chunks = []
             start = 0
             text_len = len(text)
@@ -69,8 +67,7 @@ class EmbeddingService:
 
     def generate_embedding(self, text: str) -> List[float]:
         """Generate an embedding vector using OpenAI, or fallback to deterministic offline embedding."""
-        if not settings.OPENAI_API_KEY:
-            logger.info("OPENAI_API_KEY is not configured; using deterministic offline embedding vector.")
+        if not settings.OPENAI_API_KEY or self._embedding_failed:
             return create_fallback_embedding(text)
 
         try:
@@ -78,6 +75,8 @@ class EmbeddingService:
             client = OpenAI(
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_BASE_URL or None,
+                timeout=4.0,
+                max_retries=0,
             )
 
             response = client.embeddings.create(
@@ -86,7 +85,8 @@ class EmbeddingService:
             )
             return response.data[0].embedding
         except Exception as e:
-            logger.warning(f"OpenAI embedding generation failed ({e}); falling back to offline vector.")
+            self._embedding_failed = True
+            logger.warning(f"Embedding API unavailable ({e}); switching to deterministic offline vectors.")
             return create_fallback_embedding(text)
 
     def process_and_store_source_chunks(
